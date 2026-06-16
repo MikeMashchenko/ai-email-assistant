@@ -81,25 +81,41 @@ def fetch_emails(token, query, max_results=15):
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
+    if "token" not in store:
+        return """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>AI Email Assistant</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .login-box { background: white; border-radius: 12px; padding: 40px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 400px; width: 100%; }
+        h1 { font-size: 24px; color: #333; margin-bottom: 10px; }
+        p { font-size: 14px; color: #888; margin-bottom: 30px; }
+        .login-btn { display: inline-block; padding: 12px 30px; background: #4285f4; color: white; border-radius: 8px; text-decoration: none; font-size: 16px; }
+        .login-btn:hover { background: #3367d6; }
+        .features { text-align: left; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px; }
+        .feature { font-size: 13px; color: #666; margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>AI Email Assistant</h1>
+        <p>Connect your Gmail and let AI analyze your emails</p>
+        <a href="/auth/login" class="login-btn">Sign in with Google</a>
+        <div class="features">
+            <div class="feature">📧 Real-time email stats</div>
+            <div class="feature">🤖 AI-powered email search</div>
+            <div class="feature">💰 Financial reports PDF</div>
+            <div class="feature">💬 Chat about your emails</div>
+        </div>
+    </div>
+</body>
+</html>
+"""
     return open("index.html", encoding="utf-8").read()
-
-
-@app.get("/auth/login")
-def login():
-    verifier, challenge = generate_pkce()
-    store["verifier"] = verifier
-    url = (
-        "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&response_type=code"
-        f"&scope={SCOPES}"
-        f"&code_challenge={challenge}"
-        f"&code_challenge_method=S256"
-        f"&access_type=offline"
-        f"&prompt=consent"
-    )
-    return RedirectResponse(url)
 
 
 @app.get("/auth/callback")
@@ -285,3 +301,10 @@ Return ONLY valid JSON without any extra text or markdown:
     doc.build(elements)
     
     return FileResponse(filename, media_type="application/pdf", filename=filename)
+
+
+@app.get("/auth/logout")
+def logout():
+    store.clear()
+    return RedirectResponse("/")
+
