@@ -30,13 +30,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-with open("credentials.json") as f:
-    creds_data = json.load(f)
-    client_info = creds_data["web"]
-    CLIENT_ID = client_info["client_id"]
-    CLIENT_SECRET = client_info["client_secret"]
+CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-REDIRECT_URI = "http://localhost:8000/auth/callback"
+REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/auth/callback")
 SCOPES = "https://www.googleapis.com/auth/gmail.readonly"
 
 store = {}
