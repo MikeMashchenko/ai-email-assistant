@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Email Assistant</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 40px auto; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 20px; color: #333; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 30px; }
+        .card { background: white; border-radius: 8px; padding: 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .card-label { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .card-value { font-size: 28px; font-weight: bold; color: #333; }
+        .chat-box { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .messages { height: 300px; overflow-y: auto; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 14px; border-radius: 8px; max-width: 80%; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+        .msg-ai { background: #f0f0f0; color: #333; align-self: flex-start; }
+        .msg-user { background: #0084ff; color: white; align-self: flex-end; }
+        .quick-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .btn-quick { font-size: 12px; padding: 6px 12px; background: #f0f0f0; color: #333; border: 1px solid #ddd; border-radius: 20px; cursor: pointer; }
+        .btn-quick:hover { background: #e0e0e0; }
+        .btn-pdf { background: #e3f2fd; color: #1565c0; border-color: #90caf9; }
+        .btn-pdf:hover { background: #bbdefb; }
+        .btn-finance { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
+        .btn-finance:hover { background: #c8e6c9; }
+        .input-row { display: flex; gap: 10px; }
+        input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        button.send { padding: 10px 20px; background: #0084ff; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        button.send:hover { background: #0066cc; }
+        button.send:disabled { background: #aaa; cursor: not-allowed; }
+        .period-label { font-size: 12px; color: #888; align-self: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Email Assistant</h1>
+
+        <div class="stats">
+            <div class="card">
+                <div class="card-label">Unread</div>
+                <div class="card-value" id="unread">...</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Amazon</div>
+                <div class="card-value" id="amazon">...</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Invoices</div>
+                <div class="card-value" id="invoices">...</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Urgent</div>
+                <div class="card-value" id="urgent">...</div>
+            </div>
+        </div>
+
+        <div class="chat-box">
+            <div class="messages" id="messages">
+                <div class="msg msg-ai">Hi! I'm your AI email assistant. Ask me anything about your emails.</div>
+            </div>
+
+            <div class="quick-btns">
+                <button class="btn-quick" onclick="quickAsk('What is important in my emails today?')">📧 What's important?</button>
+                <button class="btn-quick btn-finance" onclick="quickAsk('Find all bills and invoices to pay')">💰 Bills</button>
+                <button class="btn-quick" onclick="quickAsk('Find emails from Amazon about delivery')">📦 Amazon</button>
+                <button class="btn-quick" onclick="quickAsk('Generate a weekly summary report')">📊 Weekly summary</button>
+            </div>
+
+            <div class="quick-btns">
+                <span class="period-label">PDF Report:</span>
+                <button class="btn-quick btn-pdf" onclick="getPDF('week')">📄 This week</button>
+                <button class="btn-quick btn-pdf" onclick="getPDF('lastweek')">📄 Last week</button>
+                <button class="btn-quick btn-pdf" onclick="getPDF('month')">📄 This month</button>
+            </div>
+
+            <div class="input-row">
+                <input type="text" id="input" placeholder="Ask about your emails..." onkeydown="if(event.key==='Enter') sendMessage()" />
+                <button class="send" onclick="sendMessage()" id="btn">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadStats() {
+            try {
+                const res = await fetch('http://127.0.0.1:8000/emails/stats');
+                const data = await res.json();
+                document.getElementById('unread').textContent = data.unread;
+                document.getElementById('amazon').textContent = data.amazon;
+                document.getElementById('invoices').textContent = data.invoices;
+                document.getElementById('urgent').textContent = data.urgent;
+            } catch(e) {
+                console.log('Stats error:', e);
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('input');
+            const btn = document.getElementById('btn');
+            const text = input.value.trim();
+            if (!text) return;
+
+            addMessage(text, 'user');
+            input.value = '';
+            btn.disabled = true;
+            btn.textContent = '...';
+
+            try {
+                const res = await fetch('http://127.0.0.1:8000/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+                const data = await res.json();
+                addMessage(data.reply, 'ai');
+            } catch(e) {
+                addMessage('Connection error. Please try again.', 'ai');
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Send';
+        }
+
+        function addMessage(text, type) {
+            const msgs = document.getElementById('messages');
+            const div = document.createElement('div');
+            div.className = 'msg msg-' + type;
+            div.textContent = text;
+            msgs.appendChild(div);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function quickAsk(text) {
+            document.getElementById('input').value = text;
+            sendMessage();
+        }
+
+        async function getPDF(period) {
+            addMessage('Generating PDF report...', 'ai');
+            window.open(`http://localhost:8000/report/pdf?period=${period}`, '_blank');
+        }
+
+        loadStats();
+    </script>
+</body>
+</html>
