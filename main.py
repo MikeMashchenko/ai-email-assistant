@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response, Cookie
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ import json
 import secrets
 import hashlib
 import base64
+import uuid
 import requests as http_requests
 import re
 from reportlab.lib.pagesizes import letter
@@ -16,6 +17,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from datetime import datetime, timedelta
+from typing import Optional
 
 load_dotenv()
 
@@ -36,8 +38,13 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/auth/callback")
 SCOPES = "https://www.googleapis.com/auth/gmail.readonly"
 
-store = {}
-conversation_history = []
+sessions = {}
+
+
+def get_session(session_id: Optional[str]) -> dict:
+    if session_id and session_id in sessions:
+        return sessions[session_id]
+    return {}
 
 
 class ChatRequest(BaseModel):
@@ -63,7 +70,7 @@ def fetch_emails(token, query, max_results=15):
         f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={max_results}&q={query}",
         headers=headers
     ).json()
-    
+
     emails = []
     for msg in msgs.get("messages", []):
         msg_data = http_requests.get(
@@ -80,8 +87,9 @@ def fetch_emails(token, query, max_results=15):
 
 
 @app.get("/", response_class=HTMLResponse)
-def root(request: Request):
-    if "token" not in store:
+def root(request: Request, session_id: Optional[str] = Cookie(default=None)):
+    session = get_session(session_id)
+    if "token" not in session:
         return """
 <!DOCTYPE html>
 <html>
@@ -117,10 +125,16 @@ def root(request: Request):
 """
     return open("index.html", encoding="utf-8").read()
 
+
 @app.get("/auth/login")
-def login():
+def login(response: Response, session_id: Optional[str] = Cookie(default=None)):
+    if not session_id or session_id not in sessions:
+        session_id = str(uuid.uuid4())
+        sessions[session_id] = {}
+
     verifier, challenge = generate_pkce()
-    store["verifier"] = verifier
+    sessions[session_id]["verifier"] = verifier
+
     url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={CLIENT_ID}"
@@ -131,14 +145,21 @@ def login():
         f"&code_challenge_method=S256"
         f"&access_type=offline"
         f"&prompt=consent"
+        f"&state={session_id}"
     )
-    return RedirectResponse(url)
 
+    redirect = RedirectResponse(url)
+    redirect.set_cookie(key="session_id", value=session_id, httponly=True, max_age=2592000)
+    return redirect
 
 
 @app.get("/auth/callback")
-def callback(code: str):
-    verifier = store.get("verifier")
+def callback(code: str, state: str):
+    session_id = state
+    if session_id not in sessions:
+        sessions[session_id] = {}
+
+    verifier = sessions[session_id].get("verifier")
     resp = http_requests.post(
         "https://oauth2.googleapis.com/token",
         data={
@@ -151,33 +172,46 @@ def callback(code: str):
         }
     )
     tokens = resp.json()
-    store["token"] = tokens.get("access_token")
-    store["refresh_token"] = tokens.get("refresh_token")
-    return HTMLResponse("<h2>Login successful! <a href='/'>Go to app</a></h2>")
+    sessions[session_id]["token"] = tokens.get("access_token")
+    sessions[session_id]["refresh_token"] = tokens.get("refresh_token")
+
+    redirect = RedirectResponse("/")
+    redirect.set_cookie(key="session_id", value=session_id, httponly=True, max_age=2592000)
+    return redirect
+
+
+@app.get("/auth/logout")
+def logout(session_id: Optional[str] = Cookie(default=None)):
+    if session_id and session_id in sessions:
+        del sessions[session_id]
+    redirect = RedirectResponse("/")
+    redirect.delete_cookie("session_id")
+    return redirect
 
 
 @app.get("/emails/stats")
-def email_stats():
-    if "token" not in store:
+def email_stats(session_id: Optional[str] = Cookie(default=None)):
+    session = get_session(session_id)
+    if "token" not in session:
         return {"error": "Not authenticated. Go to /auth/login first"}
-    
-    headers = {"Authorization": f"Bearer {store['token']}"}
-    
+
+    headers = {"Authorization": f"Bearer {session['token']}"}
+
     unread = http_requests.get(
         "https://gmail.googleapis.com/gmail/v1/users/me/labels/UNREAD",
         headers=headers
     ).json()
-    
+
     amazon = http_requests.get(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from:amazon.com&maxResults=500",
         headers=headers
     ).json()
-    
+
     invoices = http_requests.get(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=subject:invoice&maxResults=500",
         headers=headers
     ).json()
-    
+
     return {
         "unread": unread.get("messagesUnread", 0),
         "amazon": len(amazon.get("messages", [])),
@@ -187,11 +221,14 @@ def email_stats():
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
-    global conversation_history
+def chat(request: ChatRequest, session_id: Optional[str] = Cookie(default=None)):
+    session = get_session(session_id)
 
-    if "token" not in store:
+    if "token" not in session:
         return {"reply": "Please login first at /auth/login"}
+
+    if "conversation_history" not in session:
+        session["conversation_history"] = []
 
     extract_prompt = f"Extract a Gmail search query from this user message: '{request.message}'. Return ONLY the search query string, nothing else. Examples: 'find emails from Chase' -> 'from:chase.com', 'find bills to pay' -> 'invoice OR bill OR payment', 'what is important today' -> 'is:unread', 'find emails from Holly' -> 'from:Holly'"
 
@@ -199,10 +236,10 @@ def chat(request: ChatRequest):
     gmail_query = extract_response.text.strip().replace('"', '').replace("'", "")
     print(f"Gmail query: {gmail_query}")
 
-    emails = fetch_emails(store["token"], gmail_query, max_results=15)
+    emails = fetch_emails(session["token"], gmail_query, max_results=15)
 
     if not emails:
-        emails = fetch_emails(store["token"], "is:unread", max_results=15)
+        emails = fetch_emails(session["token"], "is:unread", max_results=15)
 
     emails_text = "\n---\n".join([
         f"From: {e['sender']}\nSubject: {e['subject']}\nDate: {e['date']}\nPreview: {e['snippet']}"
@@ -212,23 +249,26 @@ def chat(request: ChatRequest):
     context = f"Here are emails found for query '{gmail_query}':\n\n{emails_text}"
     full_prompt = f"{context}\n\nAnswer this question: {request.message}"
 
-    conversation_history.append({"role": "user", "parts": [request.message]})
-    if len(conversation_history) > 20:
-        conversation_history = conversation_history[-20:]
+    history = session["conversation_history"]
+    history.append({"role": "user", "parts": [request.message]})
+    if len(history) > 20:
+        history = history[-20:]
 
-    chat_session = model.start_chat(history=conversation_history[:-1])
+    chat_session = model.start_chat(history=history[:-1])
     response = chat_session.send_message(full_prompt)
 
-    conversation_history.append({"role": "model", "parts": [response.text]})
+    history.append({"role": "model", "parts": [response.text]})
+    session["conversation_history"] = history
 
     return {"reply": response.text}
 
 
 @app.get("/report/pdf")
-def pdf_report(period: str = "week"):
-    if "token" not in store:
+def pdf_report(period: str = "week", session_id: Optional[str] = Cookie(default=None)):
+    session = get_session(session_id)
+    if "token" not in session:
         return {"error": "Not authenticated"}
-    
+
     now = datetime.now()
     if period == "week":
         date_from = now - timedelta(days=7)
@@ -242,20 +282,20 @@ def pdf_report(period: str = "week"):
     else:
         date_from = now - timedelta(days=7)
         period_name = "Current Week"
-    
+
     date_str = date_from.strftime("%Y/%m/%d")
     queries = ["invoice", "bill", "payment", "statement", "receipt", "charge"]
-    
+
     all_emails = []
     for query in queries:
-        emails = fetch_emails(store["token"], f"{query} after:{date_str}", max_results=5)
+        emails = fetch_emails(session["token"], f"{query} after:{date_str}", max_results=5)
         for e in emails:
             entry = f"From: {e['sender']}\nSubject: {e['subject']}\nDate: {e['date']}\nPreview: {e['snippet']}"
             if entry not in all_emails:
                 all_emails.append(entry)
-    
+
     context = "\n---\n".join(all_emails)
-    
+
     prompt = f"""Analyze these financial emails for the period: {period_name}
 
 {context}
@@ -268,25 +308,25 @@ Return ONLY valid JSON without any extra text or markdown:
   "total_due": "$XX.XX",
   "total_paid": "$XX.XX"
 }}"""
-    
+
     response = model.generate_content(prompt)
     text = re.sub(r'```json|```', '', response.text.strip()).strip()
-    
+
     try:
         data = json.loads(text)
     except:
         data = {"bills": [], "total_due": "N/A", "total_paid": "N/A"}
-    
-    filename = f"finance_report_{period}.pdf"
+
+    filename = f"finance_report_{period}_{session_id or 'guest'}.pdf"
     doc = SimpleDocTemplate(filename, pagesize=letter)
     styles = getSampleStyleSheet()
     elements = []
-    
+
     elements.append(Paragraph("Financial Report", styles['Title']))
     elements.append(Paragraph(f"Period: {period_name}", styles['Normal']))
     elements.append(Paragraph(f"Generated: {now.strftime('%m/%d/%Y')}", styles['Normal']))
     elements.append(Spacer(1, 20))
-    
+
     table_data = [["Sender", "Subject", "Amount", "Due Date", "Status"]]
     for bill in data.get("bills", []):
         table_data.append([
@@ -296,7 +336,7 @@ Return ONLY valid JSON without any extra text or markdown:
             bill.get("due", "N/A"),
             bill.get("status", "N/A")
         ])
-    
+
     if len(table_data) > 1:
         table = Table(table_data, colWidths=[120, 150, 70, 80, 80])
         table.setStyle(TableStyle([
@@ -311,18 +351,11 @@ Return ONLY valid JSON without any extra text or markdown:
         elements.append(table)
     else:
         elements.append(Paragraph("No financial emails found for this period.", styles['Normal']))
-    
+
     elements.append(Spacer(1, 20))
     elements.append(Paragraph(f"Total Due: {data.get('total_due', 'N/A')}", styles['Heading2']))
     elements.append(Paragraph(f"Total Paid: {data.get('total_paid', 'N/A')}", styles['Heading2']))
-    
+
     doc.build(elements)
-    
+
     return FileResponse(filename, media_type="application/pdf", filename=filename)
-
-
-@app.get("/auth/logout")
-def logout():
-    store.clear()
-    return RedirectResponse("/")
-
