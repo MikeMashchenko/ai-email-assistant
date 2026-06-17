@@ -84,7 +84,7 @@
     <script>
         async function loadStats() {
             try {
-                const res = await fetch('http://127.0.0.1:8000/emails/stats');
+                const res = await fetch('/emails/stats');
                 const data = await res.json();
                 document.getElementById('unread').textContent = data.unread;
                 document.getElementById('amazon').textContent = data.amazon;
@@ -107,7 +107,7 @@
             btn.textContent = '...';
 
             try {
-                const res = await fetch('http://127.0.0.1:8000/chat', {
+                const res = await fetch('/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text })
@@ -138,7 +138,7 @@
 
         async function getPDF(period) {
             addMessage('Generating PDF report...', 'ai');
-            window.open(`http://localhost:8000/report/pdf?period=${period}`, '_blank');
+            window.open(`/report/pdf?period=${period}`, '_blank');
         }
 
         loadStats();
