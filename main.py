@@ -117,6 +117,24 @@ def root(request: Request):
 """
     return open("index.html", encoding="utf-8").read()
 
+@app.get("/auth/login")
+def login():
+    verifier, challenge = generate_pkce()
+    store["verifier"] = verifier
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_URI}"
+        f"&response_type=code"
+        f"&scope={SCOPES}"
+        f"&code_challenge={challenge}"
+        f"&code_challenge_method=S256"
+        f"&access_type=offline"
+        f"&prompt=consent"
+    )
+    return RedirectResponse(url)
+
+
 
 @app.get("/auth/callback")
 def callback(code: str):
